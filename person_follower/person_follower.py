@@ -1,17 +1,3 @@
-# Copyright 2016 Open Source Robotics Foundation, Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
@@ -29,73 +15,71 @@ class PersonFollower(Node):
             self.listener_callback,
             10)
         self.target_point = Point()
-        self.target_distance = 0.1
-        self.wall_distance = 0.1
+        self.target_distance = 0.2
+        self.wall_distance = 0.0
+
+        # Define thresholds
+        self.PERSON_DISTANCE_THRESHOLD = 0.4
+        self.MIN_WALL_DISTANCE = 0.1
+
+        # Define linear and angular velocities
+        self.max_linear_velocity = 0.3
+        self.max_angular_velocity = 1.0
 
     def listener_callback(self, input_msg):
         ranges = input_msg.ranges
 
-        # Filtro de mediana para reducir el ruido en los datos del escáner láser
+        # Median filter to reduce noise
         filtered_ranges = self.median_filter(ranges)
 
-        # Encuentra el punto objetivo más cercano
-        self.target_point = self.find_closest_point(filtered_ranges, input_msg.angle_min, input_msg.angle_increment)
+        # Find closest point
+        min_range_idx = np.argmin(filtered_ranges)
+        min_range = filtered_ranges[min_range_idx]
+        angle = input_msg.angle_min + min_range_idx * input_msg.angle_increment
+        x = min_range * np.cos(angle)
+        y = min_range * np.sin(angle)
 
-        # Calcula la distancia al punto objetivo
-        self.target_distance = np.sqrt(self.target_point.x ** 2 + self.target_point.y ** 2)
+        # Update target point and distances
+        self.target_point.x = x
+        self.target_point.y = y
+        self.target_distance = min_range
+        self.wall_distance = np.min(filtered_ranges)
 
-        # Calcula la distancia a la pared más cercana
-        self.wall_distance = min(filtered_ranges)
+        # Calculate desired angular velocity to follow the target
+        desired_wz = np.arctan2(self.target_point.y, self.target_point.x)
 
-        # Calcula la velocidad lineal y angular
-        vx = 0.1  # Velocidad lineal inicialmente cero
-        wz = 0.0  # Velocidad angular inicialmente cero
+        # Limit angular velocity
+        self.limit_angular_velocity(desired_wz)
 
-        # Define los umbrales para la navegación
-        person_distance_threshold = 0.1  # Distancia mínima para seguir a la persona
-        min_wall_distance = 0.2  # Distancia mínima para mantenerse de las paredes
+        # Adjust linear velocity based on target distance and wall distance
+        self.adjust_linear_velocity()
 
-        print("Target Distance:", self.target_distance)
-
-        # Si la distancia al objetivo está por debajo del umbral de seguimiento de la persona
-        if self.target_distance < person_distance_threshold:
-            # Calcula la velocidad angular para seguir al objetivo, ajustada por la distancia a la pared
-            desired_wz = np.arctan2(self.target_point.y, self.target_point.x)
-            if self.wall_distance < min_wall_distance:
-                # Si estamos demasiado cerca de la pared, ajusta la velocidad angular para alejarse de ella
-                wz = np.sign(desired_wz) * 0.5
-            else:
-                # Si no, sigue la dirección del punto objetivo
-                wz = desired_wz
-            print("Following person with angular velocity:", wz)
-
-        # Publica las velocidades con suavizado
+        # Publish velocities
         output_msg = Twist()
-        output_msg.linear.x = vx
-        output_msg.angular.z = wz
+        output_msg.linear.x = self.vx
+        output_msg.angular.z = self.wz
         self.publisher_.publish(output_msg)
 
     def median_filter(self, ranges, window_size=5):
-        # Implementa un filtro de mediana para suavizar los datos del escáner láser
-        filtered_ranges = []
         half_window = window_size // 2
+        filtered_ranges = np.zeros_like(ranges)
         for i in range(len(ranges)):
             start = max(0, i - half_window)
             end = min(len(ranges), i + half_window + 1)
-            filtered_ranges.append(np.median(ranges[start:end]))
+            filtered_ranges[i] = np.median(ranges[start:end])
         return filtered_ranges
 
-    def find_closest_point(self, ranges, angle_min, angle_increment):
-        # Encuentra el punto más cercano en el escáner láser
-        min_range = min(ranges)
-        min_index = ranges.index(min_range)
-        angle = angle_min + min_index * angle_increment
-        x = min_range * np.cos(angle)
-        y = min_range * np.sin(angle)
-        point = Point()
-        point.x = x
-        point.y = y
-        return point
+    def limit_angular_velocity(self, desired_wz):
+        self.wz = np.clip(desired_wz, -self.max_angular_velocity, self.max_angular_velocity)
+
+    def adjust_linear_velocity(self):
+        if self.target_distance > self.PERSON_DISTANCE_THRESHOLD:
+            self.vx = min(self.max_linear_velocity, self.target_distance - self.PERSON_DISTANCE_THRESHOLD)
+        else:
+            self.vx = 0.0
+
+        if self.wall_distance < self.MIN_WALL_DISTANCE:
+            self.wz += np.sign(self.wz) * 0.5  # Turn away from the wall
 
 def main(args=None):
     rclpy.init(args=args)
