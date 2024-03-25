@@ -1,0 +1,33 @@
+def listener_callback(self, input_msg):
+    ranges = input_msg.ranges
+
+    # Median filter to reduce noise
+    filtered_ranges = self.median_filter(ranges)
+
+    # Find closest point
+    min_range_idx = np.argmin(filtered_ranges)
+    min_range = filtered_ranges[min_range_idx]
+    angle = input_msg.angle_min + min_range_idx * input_msg.angle_increment
+    x = min_range * np.cos(angle)
+    y = min_range * np.sin(angle)
+
+    # Update target point and distances
+    self.target_point.x = x
+    self.target_point.y = y
+    self.target_distance = min_range
+    self.wall_distance = np.min(filtered_ranges)
+
+    # Calculate desired angular velocity to follow the target
+    desired_wz = np.arctan2(-self.target_point.y, -self.target_point.x)  # Invert direction
+
+    # Limit angular velocity
+    self.limit_angular_velocity(desired_wz)
+
+    # Adjust linear velocity based on target distance and wall distance
+    self.adjust_linear_velocity()
+
+    # Publish velocities
+    output_msg = Twist()
+    output_msg.linear.x = self.vx
+    output_msg.angular.z = self.wz
+    self.publisher_.publish(output_msg)
