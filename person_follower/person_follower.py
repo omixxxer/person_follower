@@ -81,6 +81,12 @@ class PersonFollower(Node):
         if self.wall_distance < self.MIN_WALL_DISTANCE:
             self.wz += np.sign(self.wz) * 0.5  # Turn away from the wall
 
+	# Turn away from the wall
+        self.wz += np.sign(self.wz) * 1.5  
+
+        # Limit angular velocity to prevent spinning too fast
+        self.wz = np.clip(self.wz, self.max_angular_velocity, -self.max_angular_velocity)
+        
 def main(args=None):
     rclpy.init(args=args)
     person_follower = PersonFollower()
@@ -89,5 +95,5 @@ def main(args=None):
     rclpy.shutdown()
 
 if __name__ == '__main__':
-    main()
+    main()       
 
