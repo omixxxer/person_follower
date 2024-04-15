@@ -3,6 +3,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist
 import numpy as np
+import time
 
 class PersonFollower(Node):
     def __init__(self):
@@ -16,9 +17,11 @@ class PersonFollower(Node):
         self.state = "reposo"  # Estado inicial
         self.prev_angles = []  # Almacena ángulos anteriores para suavizado
         self.angle_filter_window = 5  # Tamaño de la ventana para el suavizado de ángulos
-        self.min_distance = 0.4  # Distancia mínima para evitar colisiones
+        self.min_distance = 0.5  # Distancia mínima para evitar colisiones
         self.follow_threshold = 1.0  # Rango de detección durante el seguimiento
         self.follow_angle_range = 75  # Rango de ángulo de detección durante el seguimiento
+        self.stop_timer_threshold = 5  # Umbral de tiempo para considerar que el robot está parado
+        self.stop_timer = 0  # Temporizador para contar el tiempo que el robot está parado
 
     def detect_person(self, ranges, angle_min, angle_increment):
         ranges_np = np.array(ranges)  # Convertir rangos a un array de NumPy
@@ -36,6 +39,7 @@ class PersonFollower(Node):
 
             # Determinar si hay una persona presente basada en la ubicación del centroide
             if np.sqrt(centroid_x ** 2 + centroid_y ** 2) < self.follow_threshold:
+                self.get_logger().info("¡Persona detectada!")
                 return True
 
         return False
@@ -66,11 +70,21 @@ class PersonFollower(Node):
             if self.detect_person(ranges, angle_min, angle_increment):
                 # Si se detecta a una persona, cambiar al estado de seguimiento
                 self.change_state("seguimiento")
+                self.stop_timer = 0  # Reiniciar el temporizador de parada
             else:
                 # Realizar una búsqueda completa girando en el lugar
                 output_msg = Twist()
                 output_msg.angular.z = 0.5  # Velocidad angular para girar
                 self.publisher_.publish(output_msg)
+
+                # Incrementar el temporizador si el robot está parado
+                if min(ranges) < self.min_distance:
+                    self.stop_timer += 1
+                    if self.stop_timer > self.stop_timer_threshold:
+                        self.change_state("reposo")
+                        self.get_logger().info("Objeto detectado por mucho tiempo. Cambiando al estado de reposo.")
+                        # Girar 180 grados para intentar salir del obstáculo
+                        self.rotate_180_degrees()
             return
 
         if self.state == "seguimiento":
@@ -99,10 +113,20 @@ class PersonFollower(Node):
                 output_msg.linear.x = vx
                 output_msg.angular.z = wz
                 self.publisher_.publish(output_msg)
+
+                # Mostrar información sobre el ángulo que se sigue
+                self.get_logger().info("Siguiendo ángulo: {:.2f}".format(angle_to_person))
             else:
                 # Si la persona ya no se detecta, volver al estado de búsqueda
                 self.change_state("busqueda")
             return
+
+    def rotate_180_degrees(self):
+        output_msg = Twist()
+        output_msg.angular.z = 0.5  # Velocidad angular para girar
+        start_time = time.time()
+        while time.time() - start_time < 3.0:  # Girar durante aproximadamente 3 segundos para simular 180 grados
+            self.publisher_.publish(output_msg)
 
 def main(args=None):
     rclpy.init(args=args)
