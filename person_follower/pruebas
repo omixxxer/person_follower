@@ -15,12 +15,18 @@ class PersonFollower(Node):
             '/scan',
             self.listener_callback,
             10)
-        self.subscription 
+        self.subscription
 
-        self.prev_ranges = []  # Store previous laser readings
-        self.prev_angles = []  # Store previous angles for smoothing
+        self.prev_angles = []  # Store previous angles for angle smoothing
+        self.last_angle = None  # Store the last angle of the robot
+        self.last_angle_time = None  # Store the time when the last angle was recorded
         self.min_distance = 0.4  # Set a minimum distance to avoid collisions
         self.angle_filter_window = 5  # Window size for angle smoothing
+
+        self.person_detected = False  # Flag to indicate if a person is currently detected
+        self.object_detected = False  # Flag to indicate if an object is currently detected
+        
+        print("Iniciando")
 
     def detect_person(self, ranges):
         # Logic to determine if there is a person in the laser data
@@ -60,11 +66,25 @@ class PersonFollower(Node):
 
         # Check if a person is detected
         if self.detect_person(ranges):
+            self.person_detected = True
+            self.object_detected = False
+        else:
+            self.person_detected = False
+
+        # Check if an object is detected
+        if not self.person_detected and not self.object_detected:
+            # Logic to determine if there's an object in the laser data
+            # For now, let's assume an object is detected if there's no person
+            self.object_detected = True
+
+        if self.person_detected:
             # Find the index of the minimum range (closest obstacle)
             min_range_index = ranges.index(min(ranges))
 
             # Calculate the angle to the person
             angle_to_person = angle_min + min_range_index * angle_increment
+            
+            print("Angle being followed:", angle_to_person)
 
             # Smooth out the angle change
             if self.prev_angles:
@@ -79,6 +99,8 @@ class PersonFollower(Node):
 
             # Use the angle to the person as the target angle for the robot to aim towards
             target_angle = angle_to_person
+            
+            print("Angle being followed:", angle_to_person)
 
             # Calculate the difference between the target angle and the current angle (heading) of the robot
             angle_difference = -target_angle  # Negative to change the orientation to move
@@ -96,16 +118,49 @@ class PersonFollower(Node):
             output_msg.linear.x = vx
             output_msg.angular.z = wz
             self.publisher_.publish(output_msg)
+            
+            print("Robot moving towards the person.")
+            
+            
         else:
-            # If no person is detected, stop the robot
-            vx = 0.0
-            wz = 0.0
+            self.stop_robot()
+            print("No person detected. Stopping the robot.")
+            
+        # Check if the robot's angle remained same for a significant time
+            if self.last_angle is not None and angle_to_person == self.last_angle:
+                if self.last_angle_time is None:
+                    self.last_angle_time = time.time()
+                else:
+                    elapsed_time = time.time() - self.last_angle_time
+                    if elapsed_time > 10:  # Check if angle remained same for 10 seconds
+                        # Rotate the robot 180 degrees
+                        print("Robot has been in the same angle for 10 seconds. Rotating 180 degrees.")
+                        self.rotate_180_degrees()
+            else:
+                self.last_angle = angle_to_person
+                self.last_angle_time = None
 
-            # Create Twist message and publish
-            output_msg = Twist()
-            output_msg.linear.x = vx
-            output_msg.angular.z = wz
-            self.publisher_.publish(output_msg)
+        
+
+    def stop_robot(self):
+        # Stop the robot
+        output_msg = Twist()
+        output_msg.linear.x = 0.0
+        output_msg.angular.z = 0.0
+        self.publisher_.publish(output_msg)
+
+    def get_robot_angle(self, ranges, angle_min, angle_increment):
+        min_range_index = ranges.index(min(ranges))
+        return angle_min + min_range_index * angle_increment
+
+    def rotate_180_degrees(self):
+        # Rotate the robot 180 degrees
+        output_msg = Twist()
+        output_msg.angular.z = math.pi  # Rotate at pi rad/s (180 degrees/s)
+        self.publisher_.publish(output_msg)
+        time.sleep(2)  # Rotate for 2 seconds
+        output_msg.angular.z = 0  # Stop rotation
+        self.publisher_.publish(output_msg)
 
 def main(args=None):
     rclpy.init(args=args)
@@ -113,7 +168,9 @@ def main(args=None):
 
     # Introduce a delay to let the robot settle before starting to process laser data
     time.sleep(5)
-
+    
+    print("Starting robot movement.")
+    
     rclpy.spin(person_follower)
     person_follower.destroy_node()
     rclpy.shutdown()
