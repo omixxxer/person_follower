@@ -25,6 +25,7 @@ class PersonFollower(Node):
 
         self.person_detected = False  # Flag to indicate if a person is currently detected
         self.object_detected = False  # Flag to indicate if an object is currently detected
+        self.rotation_completed = False  # Flag to indicate if the 180-degree rotation is completed
         
         print("Iniciando")
 
@@ -46,23 +47,32 @@ class PersonFollower(Node):
         return False
 
     def smooth_angle(self, angle):
+        # Convert angles to radians and ensure they are within the range [-pi, pi]
+        angles_rad = [math.radians(a) for a in self.prev_angles]
+        angle_rad = math.radians(angle)
+
         # Add the new angle to the list of previous angles
-        self.prev_angles.append(angle)
+        angles_rad.append(angle_rad)
 
         # If the list exceeds the size of the window, remove the oldest angle
-        if len(self.prev_angles) > self.angle_filter_window:
-            self.prev_angles.pop(0)
+        if len(angles_rad) > self.angle_filter_window:
+            angles_rad.pop(0)
 
         # Calculate the average angle from the angles stored in the list
-        avg_angle = sum(self.prev_angles) / len(self.prev_angles)
+        avg_angle_rad = sum(math.atan2(math.sin(a), math.cos(a)) for a in angles_rad) / len(angles_rad)
         
-        return avg_angle
+        # Convert the average angle back to degrees
+        avg_angle_deg = math.degrees(avg_angle_rad)
+
+        return avg_angle_deg
 
     def listener_callback(self, input_msg):
         angle_min = input_msg.angle_min
         angle_max = input_msg.angle_max
         angle_increment = input_msg.angle_increment
         ranges = input_msg.ranges
+        
+        angle_to_person = 0  # Set a default value
 
         # Check if a person is detected
         if self.detect_person(ranges):
@@ -121,12 +131,19 @@ class PersonFollower(Node):
             
             print("Robot moving towards the person.")
             
+            # Reset the rotation completion flag
+            self.rotation_completed = False
             
         else:
             self.stop_robot()
             print("No person detected. Stopping the robot.")
             
-        # Check if the robot's angle remained same for a significant time
+            # Check if the rotation is completed and initiate rotation if not
+            if not self.rotation_completed:
+                self.rotate_180_degrees()
+                self.rotation_completed = True  # Set the flag to True after completing the rotation
+
+            # Check if the robot's angle remained same for a significant time
             if self.last_angle is not None and angle_to_person == self.last_angle:
                 if self.last_angle_time is None:
                     self.last_angle_time = time.time()
@@ -156,11 +173,12 @@ class PersonFollower(Node):
     def rotate_180_degrees(self):
         # Rotate the robot 180 degrees
         output_msg = Twist()
-        output_msg.angular.z = math.pi  # Rotate at pi rad/s (180 degrees/s)
+        output_msg.angular.z = math.pi * 2  # Rotate at 2*pi rad/s (360 degrees/s)
         self.publisher_.publish(output_msg)
         time.sleep(2)  # Rotate for 2 seconds
-        output_msg.angular.z = 0  # Stop rotation
+        output_msg.angular.z = 0.0  # Stop rotation
         self.publisher_.publish(output_msg)
+
 
 def main(args=None):
     rclpy.init(args=args)
