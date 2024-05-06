@@ -26,7 +26,9 @@ class PersonFollower(Node):
         self.person_detected = False  # Flag to indicate if a person is currently detected
         self.object_detected = False  # Flag to indicate if an object is currently detected
         self.rotation_completed = False  # Flag to indicate if the 180-degree rotation is completed
-        
+        self.still_start_time = None  # Store the start time when the robot becomes still
+        self.still_timeout = 10  # Timeout duration in seconds for the robot to remain still before rotation
+
         print("Iniciando")
 
     def detect_person(self, ranges):
@@ -71,6 +73,9 @@ class PersonFollower(Node):
         angle_max = input_msg.angle_max
         angle_increment = input_msg.angle_increment
         ranges = input_msg.ranges
+        
+        vx = 0.0  # Initialize linear velocity
+        wz = 0.0  # Initialize angular velocity
         
         angle_to_person = 0  # Set a default value
 
@@ -135,7 +140,6 @@ class PersonFollower(Node):
             self.rotation_completed = False
             
         else:
-            self.stop_robot()
             print("No person detected. Stopping the robot.")
             
             # Check if the rotation is completed and initiate rotation if not
@@ -144,20 +148,17 @@ class PersonFollower(Node):
                 self.rotation_completed = True  # Set the flag to True after completing the rotation
 
             # Check if the robot's angle remained same for a significant time
-            if self.last_angle is not None and angle_to_person == self.last_angle:
-                if self.last_angle_time is None:
-                    self.last_angle_time = time.time()
-                else:
-                    elapsed_time = time.time() - self.last_angle_time
-                    if elapsed_time > 10:  # Check if angle remained same for 10 seconds
-                        # Rotate the robot 180 degrees
-                        print("Robot has been in the same angle for 10 seconds. Rotating 180 degrees.")
-                        self.rotate_180_degrees()
+            if self.still_start_time is not None:
+                current_time = time.time()
+                elapsed_time = current_time - self.still_start_time
+                if elapsed_time > self.still_timeout:
+                    print("Robot has been still for {elapsed_time} seconds. Rotating 180 degrees.")
+                    self.rotate_180_degrees()
+                    self.rotation_completed = True  # Set the flag to True after completing the rotation
             else:
-                self.last_angle = angle_to_person
-                self.last_angle_time = None
-
-        
+                # If the robot is now still, record the start time
+                if vx == 0 and wz == 0:
+                    self.still_start_time = time.time()
 
     def stop_robot(self):
         # Stop the robot
@@ -182,14 +183,11 @@ class PersonFollower(Node):
 
 def main(args=None):
     rclpy.init(args=args)
+
     person_follower = PersonFollower()
 
-    # Introduce a delay to let the robot settle before starting to process laser data
-    time.sleep(5)
-    
-    print("Starting robot movement.")
-    
     rclpy.spin(person_follower)
+
     person_follower.destroy_node()
     rclpy.shutdown()
 
