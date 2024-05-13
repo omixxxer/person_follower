@@ -25,9 +25,11 @@ class PersonFollower(Node):
 
         self.person_detected = False  # Flag to indicate if a person is currently detected
         self.object_detected = False  # Flag to indicate if an object is currently detected
+        self.rotation_triggered = False  # Flag to indicate if the rotation is triggered
         self.rotation_completed = False  # Flag to indicate if the 180-degree rotation is completed
         self.still_start_time = None  # Store the start time when the robot becomes still
         self.still_timeout = 10  # Timeout duration in seconds for the robot to remain still before rotation
+        self.angle_tracking_timeout = 20  # Timeout duration in seconds for angle tracking before rotation
 
         print("Iniciando")
 
@@ -136,50 +138,41 @@ class PersonFollower(Node):
             
             print("Robot moving towards the person.")
             
-            # Reset the rotation completion flag
+            # Reset the rotation flags
+            self.rotation_triggered = False
             self.rotation_completed = False
+            self.still_start_time = None  # Reset the time for stillness tracking
             
         else:
             print("No person detected. Stopping the robot.")
             
-            # Check if the rotation is completed and initiate rotation if not
-            if not self.rotation_completed:
+            # Check if the rotation is triggered and completed
+            if not self.rotation_triggered:
+                # Check if the robot's angle remained same for a significant time and both velocities are 0
+                if self.still_start_time is not None:
+                    current_time = time.time()
+                    elapsed_time = current_time - self.still_start_time
+                    if elapsed_time > self.angle_tracking_timeout and vx == 0 and wz == 0:
+                        print("Rotation triggered due to angle tracking timeout.")
+                        self.rotation_triggered = True
+                else:
+                    # If the robot is now still, record the start time
+                    if vx == 0 and wz == 0:
+                        self.still_start_time = time.time()
+            
+            # If rotation is triggered and not completed, rotate the robot
+            if self.rotation_triggered and not self.rotation_completed:
                 self.rotate_180_degrees()
-                self.rotation_completed = True  # Set the flag to True after completing the rotation
-
-            # Check if the robot's angle remained same for a significant time
-            if self.still_start_time is not None:
-                current_time = time.time()
-                elapsed_time = current_time - self.still_start_time
-                if elapsed_time > self.still_timeout:
-                    print("Robot has been still for {elapsed_time} seconds. Rotating 180 degrees.")
-                    self.rotate_180_degrees()
-                    self.rotation_completed = True  # Set the flag to True after completing the rotation
-            else:
-                # If the robot is now still, record the start time
-                if vx == 0 and wz == 0:
-                    self.still_start_time = time.time()
-
-    def stop_robot(self):
-        # Stop the robot
-        output_msg = Twist()
-        output_msg.linear.x = 0.0
-        output_msg.angular.z = 0.0
-        self.publisher_.publish(output_msg)
-
-    def get_robot_angle(self, ranges, angle_min, angle_increment):
-        min_range_index = ranges.index(min(ranges))
-        return angle_min + min_range_index * angle_increment
 
     def rotate_180_degrees(self):
         # Rotate the robot 180 degrees
         output_msg = Twist()
         output_msg.angular.z = math.pi * 2  # Rotate at 2*pi rad/s (360 degrees/s)
         self.publisher_.publish(output_msg)
-        time.sleep(2)  # Rotate for 2 seconds
+        time.sleep(2)  # Always wait for 2 seconds after each rotation
         output_msg.angular.z = 0.0  # Stop rotation
         self.publisher_.publish(output_msg)
-
+        self.rotation_completed = True  # Set rotation completed flag
 
 def main(args=None):
     rclpy.init(args=args)
