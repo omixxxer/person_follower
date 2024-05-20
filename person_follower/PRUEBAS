@@ -9,86 +9,93 @@ class PersonFollower(Node):
 
     def __init__(self):
         super().__init__('person_follower')
-        
-        # Crear un publicador para el tópico /cmd_vel para controlar el movimiento del robot
         self.publisher_ = self.create_publisher(Twist, '/cmd_vel', 10)
-        
-        # Crear una suscripción al tópico /scan para recibir datos de láser
         self.subscription = self.create_subscription(
             LaserScan,
             '/scan',
             self.listener_callback,
             10)
+        self.subscription
 
-        # Inicializar variables y flags
-        self.prev_angles = []  # Almacenar ángulos previos para suavizar
+        self.prev_angles = []  # Guardar ángulos anteriores para suavizado
+        self.last_angle = None  # Último ángulo registrado del robot
+        self.last_angle_time = None  # Tiempo en que se registró el último ángulo
         self.min_distance = 0.4  # Distancia mínima para evitar colisiones
-        self.angle_filter_window = 5  # Tamaño de ventana para suavizar ángulos
+        self.angle_filter_window = 5  # Tamaño de ventana para suavizado de ángulos
 
-        self.person_detected = False  # Flag para indicar si una persona está detectada
-        self.object_detected = False  # Flag para indicar si un objeto está detectado
-        self.rotation_triggered = False  # Flag para indicar si se ha activado la rotación
-        self.rotation_completed = False  # Flag para indicar si se ha completado la rotación de 180 grados
-        self.still_start_time = None  # Tiempo de inicio cuando el robot se queda quieto
-        self.still_timeout = 10  # Duración del tiempo de espera en segundos para rotar después de estar quieto
-        self.angle_tracking_timeout = 20  # Duración del tiempo de espera en segundos para el seguimiento del ángulo antes de rotar
-        
+        self.person_detected = False  # Indica si se ha detectado una persona
+        self.object_detected = False  # Indica si se ha detectado un objeto
+        self.rotation_triggered = False  # Indica si se ha iniciado la rotación
+        self.rotation_completed = False  # Indica si se ha completado la rotación de 180 grados
+        self.still_start_time = None  # Tiempo en que el robot se quedó quieto
+        self.still_timeout = 10  # Duración de tiempo en segundos para iniciar rotación si el robot permanece quieto
+        self.angle_tracking_timeout = 20  # Duración de tiempo en segundos para seguimiento de ángulos antes de rotar
+
         self.angle_mode = "360"  # Modo de ángulo: "360" o "0"
-        
-        # Mensaje de inicio
-        self.get_logger().info("Person Follower Node Initialized")
+        self.rotation_enabled = True  # Variable para habilitar/deshabilitar la lógica de rotación
+
+        print("Iniciando")
+
+    def set_rotation_enabled(self, enabled):
+        """Permite habilitar o deshabilitar la lógica de rotación."""
+        self.rotation_enabled = enabled
+        print(f"Lógica de rotación {'habilitada' if enabled else 'deshabilitada'}.")
 
     def detect_person(self, ranges):
-        # Lógica para determinar si hay una persona en los datos láser
+        # Lógica para determinar si hay una persona en los datos del láser
         if self.angle_mode == "360":
             min_range = min(ranges)
         else:
-            min_range = ranges[0]  # Solo considerar el ángulo frontal
+            # Calcular el índice del ángulo frontal
+            angle_min = -math.pi / 4  # Ejemplo de valor típico para angle_min (-45 grados)
+            angle_increment = (math.pi / 2) / len(ranges)  # Ejemplo de valor típico para un escaneo de 180 grados
+            frontal_index = int((0 - angle_min) / angle_increment)
+            min_range = ranges[frontal_index]  # Solo considerar el ángulo frontal
 
         person_threshold = 1.5  # Umbral para detección de persona
         obstacle_threshold = 0.25  # Umbral para detección de obstáculos
-        
+
         # Verificar si la distancia mínima está por debajo del umbral de obstáculos
         if min_range < obstacle_threshold:
-            return False  # Si hay un obstáculo muy cerca, no considerarlo como persona
-        
+            return False  # Si hay un obstáculo demasiado cerca, no considerarlo como persona
+
         # Verificar si la distancia mínima está por debajo del umbral de persona
         if min_range < person_threshold:
             return True  # Si la distancia está por debajo del umbral de persona, considerarlo como persona
-        
-        return False  # Si no se detecta ni obstáculo ni persona, devolver False
+
+        # Si no se detecta ni obstáculo ni persona, devolver False
+        return False
 
     def smooth_angle(self, angle):
-        # Convertir ángulos a radianes y asegurarse de que están en el rango [-pi, pi]
+        # Convertir ángulos a radianes y asegurar que estén dentro del rango [-pi, pi]
         angles_rad = [math.radians(a) for a in self.prev_angles]
         angle_rad = math.radians(angle)
 
-        # Añadir el nuevo ángulo a la lista de ángulos previos
+        # Añadir el nuevo ángulo a la lista de ángulos anteriores
         angles_rad.append(angle_rad)
 
         # Si la lista excede el tamaño de la ventana, eliminar el ángulo más antiguo
         if len(angles_rad) > self.angle_filter_window:
             angles_rad.pop(0)
 
-        # Calcular el ángulo promedio a partir de los ángulos almacenados en la lista
+        # Calcular el ángulo promedio de los ángulos almacenados en la lista
         avg_angle_rad = sum(math.atan2(math.sin(a), math.cos(a)) for a in angles_rad) / len(angles_rad)
-        
-        # Convertir el ángulo promedio de nuevo a grados
+
+        # Convertir el ángulo promedio de vuelta a grados
         avg_angle_deg = math.degrees(avg_angle_rad)
 
         return avg_angle_deg
 
     def listener_callback(self, input_msg):
-        # Extraer información del mensaje LaserScan
         angle_min = input_msg.angle_min
         angle_max = input_msg.angle_max
         angle_increment = input_msg.angle_increment
         ranges = input_msg.ranges
-        
+
         vx = 0.0  # Inicializar velocidad lineal
         wz = 0.0  # Inicializar velocidad angular
-        
-        angle_to_person = 0  # Establecer un valor predeterminado para el ángulo
+
+        angle_to_person = 0  # Valor predeterminado
 
         # Verificar si se detecta una persona
         if self.detect_person(ranges):
@@ -99,19 +106,21 @@ class PersonFollower(Node):
 
         # Verificar si se detecta un objeto
         if not self.person_detected and not self.object_detected:
-            self.object_detected = True  # Suponer que se detecta un objeto si no hay persona
+            self.object_detected = True
 
         if self.person_detected:
             # Encontrar el índice de la distancia mínima (obstáculo más cercano)
             if self.angle_mode == "360":
                 min_range_index = ranges.index(min(ranges))
             else:
-                min_range_index = 1  # Solo considerar el ángulo frontal
+                # Calcular el índice del ángulo frontal
+                frontal_index = int((0 - angle_min) / angle_increment)
+                min_range_index = frontal_index
 
             # Calcular el ángulo hacia la persona
             angle_to_person = angle_min + min_range_index * angle_increment
-            
-            self.get_logger().info(f"Angle being followed: {angle_to_person}")
+
+            print("Angle being followed:", angle_to_person)
 
             # Suavizar el cambio de ángulo
             if self.prev_angles:
@@ -123,11 +132,11 @@ class PersonFollower(Node):
             else:
                 vx = 0.35  # Velocidad normal
 
-            # Usar el ángulo hacia la persona como el ángulo objetivo para que el robot se oriente
+            # Usar el ángulo hacia la persona como el ángulo objetivo para que el robot se dirija hacia allí
             target_angle = angle_to_person
-            
-            # Calcular la diferencia entre el ángulo objetivo y el ángulo actual del robot
-            angle_difference = -target_angle  # Negativo para cambiar la orientación y moverse
+
+            # Calcular la diferencia entre el ángulo objetivo y el ángulo actual (rumbo) del robot
+            angle_difference = -target_angle  # Negativo para cambiar la orientación para moverse
 
             # Limitar la velocidad angular para evitar giros excesivos
             max_angular_velocity = 0.6
@@ -142,50 +151,54 @@ class PersonFollower(Node):
             output_msg.linear.x = vx
             output_msg.angular.z = wz
             self.publisher_.publish(output_msg)
-            
-            self.get_logger().info("Robot moving towards the person.")
-            
-            # Resetear flags de rotación
+
+            print("Robot moving towards the person.")
+
+            # Resetear las banderas de rotación
             self.rotation_triggered = False
             self.rotation_completed = False
-            self.still_start_time = None  # Resetear tiempo para seguimiento de inmovilidad
-            
+            self.still_start_time = None  # Resetear el tiempo de seguimiento de inmovilidad
+
         else:
-            self.get_logger().info("No person detected. Stopping the robot.")
-            
-            # Verificar si se ha activado y completado la rotación
-            if not self.rotation_triggered:
-                # Verificar si el ángulo del robot se mantuvo igual durante un tiempo significativo y ambas velocidades son 0
-                if self.still_start_time is not None:
-                    current_time = time.time()
-                    elapsed_time = current_time - self.still_start_time
-                    if elapsed_time > self.angle_tracking_timeout and vx == 0 and wz == 0:
-                        self.get_logger().info("Rotation triggered due to angle tracking timeout.")
-                        self.rotation_triggered = True
-                else:
-                    # Si el robot ahora está quieto, registrar el tiempo de inicio
-                    if vx == 0 and wz == 0:
-                        self.still_start_time = time.time()
-            
-            # Si la rotación está activada y no completada, rotar el robot
-            if self.rotation_triggered and not self.rotation_completed:
-                self.rotate_180_degrees()
+            print("No person detected. Stopping the robot.")
+
+            # Verificar si la lógica de rotación está habilitada
+            if self.rotation_enabled:
+                # Verificar si la rotación está iniciada y completada
+                if not self.rotation_triggered:
+                    # Verificar si el ángulo del robot se mantuvo igual durante un tiempo significativo y ambas velocidades son 0
+                    if self.still_start_time is not None:
+                        current_time = time.time()
+                        elapsed_time = current_time - self.still_start_time
+                        if elapsed_time > self.angle_tracking_timeout and vx == 0 and wz == 0:
+                            print("Rotation triggered due to angle tracking timeout.")
+                            self.rotation_triggered = True
+                    else:
+                        # Si el robot está ahora quieto, registrar el tiempo de inicio
+                        if vx == 0 and wz == 0:
+                            self.still_start_time = time.time()
+
+                # Si la rotación está iniciada y no completada, rotar el robot
+                if self.rotation_triggered and not self.rotation_completed:
+                    self.rotate_180_degrees()
 
     def rotate_180_degrees(self):
         # Rotar el robot 180 grados
         output_msg = Twist()
         output_msg.angular.z = math.pi * 2  # Rotar a 2*pi rad/s (360 grados/s)
         self.publisher_.publish(output_msg)
-        time.sleep(2)  # Esperar 2 segundos después de cada rotación
-        output_msg.angular.z = 0.0  # Detener rotación
+        time.sleep(2)  # Esperar siempre 2 segundos después de cada rotación
+        output_msg.angular.z = 0.0  # Detener la rotación
         self.publisher_.publish(output_msg)
-        self.rotation_completed = True  # Establecer flag de rotación completada
-        self.get_logger().info("180-degree rotation completed")
+        self.rotation_completed = True  # Establecer la bandera de rotación completada
 
 def main(args=None):
     rclpy.init(args=args)
 
     person_follower = PersonFollower()
+    
+    # Ejemplo: Deshabilitar la lógica de rotación
+    person_follower.set_rotation_enabled(False)
 
     rclpy.spin(person_follower)
 
